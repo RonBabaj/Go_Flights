@@ -79,12 +79,11 @@ Copy code
 go run main.go
 ```
 ## 🧠 Command Reference
----
 ### Command	Description
-- ** /start	Welcome message and usage guide **
-- ** /help	Shows example commands **
-- ** /flights FROM TO DATE	One-way flight search **
-- ** /flights FROM TO DATE DURATION	Round-trip flight search (e.g. 7d, 10d) **
+-**/start	Welcome message and usage guide**
+-**/help	Shows example commands**
+-**/flights FROM TO DATE	One-way flight search**
+-**/flights FROM TO DATE DURATION	Round-trip flight search (e.g. 7d, 10d)**
 
 #### 📡 API Integration
 The bot uses the following Amadeus endpoints:
