@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -434,6 +435,13 @@ Example: /month_deals TLV BER 2025-12 7
 
 // Main entry point
 func main() {
+	// Start the HTTP server for Render Deployment
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "10000"
+	}
+	// initialize the bot
+	http.ListenAndServe(":"+port, nil)
 	if err := godotenv.Load(); err != nil {
 		log.Println("Note: .env file not found.")
 	}
