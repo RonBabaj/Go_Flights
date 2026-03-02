@@ -64,15 +64,20 @@ func formatDateAndTime(isoTime string) (string, time.Time) {
 	return t.Format("15:04 (Jan 02)"), t
 }
 
-// getItinerarySummary calculates total duration, stops, and endpoint codes for a leg.
+// getItinerarySummary calculates total duration, stops, and endpoint codes for the first leg of an offer.
 func getItinerarySummary(offer map[string]interface{}) (string, string, string, int) {
+	return getItinerarySummaryAt(offer, 0)
+}
+
+// getItinerarySummaryAt does the same for the itinerary at the given index (for round-trip offers).
+func getItinerarySummaryAt(offer map[string]interface{}, itineraryIndex int) (string, string, string, int) {
 	segmentsInterface, ok := offer["itineraries"].([]interface{})
-	if !ok || len(segmentsInterface) == 0 {
+	if !ok || itineraryIndex >= len(segmentsInterface) {
 		return "N/A", "N/A", "N/A", 0
 	}
-	itinerary := segmentsInterface[0].(map[string]interface{})
-	segments := itinerary["segments"].([]interface{})
-	if len(segments) == 0 {
+	itinerary := segmentsInterface[itineraryIndex].(map[string]interface{})
+	segments, ok := itinerary["segments"].([]interface{})
+	if !ok || len(segments) == 0 {
 		return "N/A", "N/A", "N/A", 0
 	}
 	firstSegment := segments[0].(map[string]interface{})
@@ -86,15 +91,18 @@ func getItinerarySummary(offer map[string]interface{}) (string, string, string, 
 	return startCode, endCode, totalDuration, stops
 }
 
-// buildDetailedItinerary formats one itinerary leg for the detail view.
-func buildDetailedItinerary(offer map[string]interface{}, dictionaries map[string]interface{}, direction string) string {
+// buildDetailedItinerary formats one itinerary leg for the detail view. itineraryIndex is 0 for first leg, 1 for return.
+func buildDetailedItinerary(offer map[string]interface{}, dictionaries map[string]interface{}, direction string, itineraryIndex int) string {
 	var msg strings.Builder
 	segmentsInterface, ok := offer["itineraries"].([]interface{})
-	if !ok || len(segmentsInterface) == 0 {
+	if !ok || itineraryIndex >= len(segmentsInterface) {
 		return fmt.Sprintf("Itinerary details for %s unavailable.", direction)
 	}
-	itinerary := segmentsInterface[0].(map[string]interface{})
-	segments := itinerary["segments"].([]interface{})
+	itinerary := segmentsInterface[itineraryIndex].(map[string]interface{})
+	segments, ok := itinerary["segments"].([]interface{})
+	if !ok || len(segments) == 0 {
+		return fmt.Sprintf("Itinerary details for %s unavailable.", direction)
+	}
 
 	price := extractRawPrice(offer)
 	if price > 0 {
@@ -235,11 +243,92 @@ func displayFlightPage(bot *tgbotapi.BotAPI, chatID int64, messageID int, key st
 		if len(navRow) > 0 {
 			rows = append(rows, navRow)
 		}
-	} else {
-		// Logic for standard /flights pagination would go here if needed.
-		// For simplicity, we are showing how it works with month_deals.
-		// To implement for /flights, you'd make a new API call here.
-		// For this example, we assume the BACK button is primarily for month_deals.
+	} else if strings.HasPrefix(key, "FLIGHTS_") {
+		storedMapSlice, ok := flightStore[chatID][key]
+		if !ok {
+			return
+		}
+		offersRaw := storedMapSlice[0]["offers"]
+		offers, ok := offersRaw.([]map[string]interface{})
+		if !ok {
+			return
+		}
+		const maxPerPage = 5
+		totalOffers := len(offers)
+		pageStart := offset
+		pageEnd := offset + maxPerPage
+		if pageEnd > totalOffers {
+			pageEnd = totalOffers
+		}
+		keyParts := strings.Split(key, "_")
+		if len(keyParts) < 2 {
+			return
+		}
+		params := strings.Split(keyParts[1], "-")
+		if len(params) < 3 {
+			return
+		}
+		origin, dest := params[0], params[1]
+		depDate, retDate := params[2], ""
+		if len(params) >= 4 {
+			retDate = params[3]
+		}
+		msgText.WriteString(fmt.Sprintf("✈️ **Flights %s → %s**\n", origin, dest))
+		msgText.WriteString(fmt.Sprintf("   _%s", depDate))
+		if retDate != "" {
+			msgText.WriteString(fmt.Sprintf(" — %s_", retDate))
+		}
+		msgText.WriteString(fmt.Sprintf("\n   Showing %d-%d of **%d**:\n\n", pageStart+1, pageEnd, totalOffers))
+		for i := pageStart; i < pageEnd; i++ {
+			offer := offers[i]
+			price := extractRawPrice(offer)
+			msgText.WriteString(fmt.Sprintf("✨ **Offer #%d** | 💲 **$%.2f USD** ✨\n", i+1, price))
+			msgText.WriteString(separator + "\n")
+			outStart, outEnd, outDur, outStops := getItinerarySummaryAt(offer, 0)
+			stopStr := "Direct"
+			if outStops > 0 {
+				stopStr = fmt.Sprintf("%d stop(s)", outStops)
+			}
+			msgText.WriteString(fmt.Sprintf("🛫 **Outbound:** %s → %s | 🕒 %s (%s)\n", outStart, outEnd, outDur, stopStr))
+			itineraries, _ := offer["itineraries"].([]interface{})
+			if len(itineraries) > 1 {
+				retStart, retEnd, retDur, retStops := getItinerarySummaryAt(offer, 1)
+				stopStrRet := "Direct"
+				if retStops > 0 {
+					stopStrRet = fmt.Sprintf("%d stop(s)", retStops)
+				}
+				msgText.WriteString(fmt.Sprintf("🛬 **Return:** %s → %s | 🕒 %s (%s)\n", retStart, retEnd, retDur, stopStrRet))
+			}
+			msgText.WriteString("\n")
+			outCallback := fmt.Sprintf("DETAILS_FLIGHTS_%s_%d_0_%d", keyParts[1], i, offset)
+			retCallback := fmt.Sprintf("DETAILS_FLIGHTS_%s_%d_1_%d", keyParts[1], i, offset)
+			if len(itineraries) > 1 {
+				rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+					tgbotapi.NewInlineKeyboardButtonData("Outbound Details", outCallback),
+					tgbotapi.NewInlineKeyboardButtonData("Return Details", retCallback),
+				))
+			} else {
+				rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+					tgbotapi.NewInlineKeyboardButtonData("Details", outCallback),
+				))
+			}
+			msgText.WriteString(separator + "\n\n")
+		}
+		var navRow []tgbotapi.InlineKeyboardButton
+		if offset > 0 {
+			prevOffset := offset - maxPerPage
+			if prevOffset < 0 {
+				prevOffset = 0
+			}
+			navRow = append(navRow, tgbotapi.NewInlineKeyboardButtonData("⬅️ Prev", fmt.Sprintf("PREV_FLIGHTS_%s_%d", keyParts[1], prevOffset)))
+		}
+		if pageEnd < totalOffers {
+			nextOffset := offset + maxPerPage
+			navRow = append(navRow, tgbotapi.NewInlineKeyboardButtonData("Next ➡️", fmt.Sprintf("NEXT_FLIGHTS_%s_%d", keyParts[1], nextOffset)))
+		}
+		if len(navRow) > 0 {
+			rows = append(rows, navRow)
+		}
 	}
 
 	editMsg := tgbotapi.NewEditMessageText(chatID, messageID, msgText.String())
@@ -266,14 +355,18 @@ func handleCallback(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
 		var key string
 		var offerIndex, directionIndex, originalOffset int
 
-		// DETAILS_DEAL_KEY-PART_0_0_0 (action, "DEAL", key, offerIdx, dirIdx, offset)
+		// DETAILS_DEAL_KEY-PART_0_0_0 or DETAILS_FLIGHTS_KEY-PART_0_0_0
 		if parts[1] == "DEAL" {
 			key = fmt.Sprintf("%s_%s", parts[1], parts[2])
 			offerIndex, _ = strconv.Atoi(parts[3])
 			directionIndex, _ = strconv.Atoi(parts[4])
 			originalOffset, _ = strconv.Atoi(parts[5])
+		} else if parts[1] == "FLIGHTS" && len(parts) >= 6 {
+			key = fmt.Sprintf("%s_%s", parts[1], parts[2])
+			offerIndex, _ = strconv.Atoi(parts[3])
+			directionIndex, _ = strconv.Atoi(parts[4])
+			originalOffset, _ = strconv.Atoi(parts[5])
 		} else {
-			// DETAILS_KEY-PART_0_0_0 (action, key, offerIdx, dirIdx, offset)
 			key = parts[1]
 			offerIndex, _ = strconv.Atoi(parts[2])
 			directionIndex, _ = strconv.Atoi(parts[3])
@@ -289,15 +382,15 @@ func handleCallback(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
 		var offer map[string]interface{}
 		var dictionaries map[string]interface{}
 		directionStr := "Outbound"
+		itineraryIdx := 0
 
-		// This logic is currently focused on month_deals as it's the more complex case.
 		if strings.HasPrefix(key, "DEAL_") {
 			var allDeals []FullRoundTrip
 			dealsJSON := storedMapSlice[0]["deals_json"].(string)
 			json.Unmarshal([]byte(dealsJSON), &allDeals)
 
 			if offerIndex >= len(allDeals) {
-				return // Index out of bounds
+				return
 			}
 			deal := allDeals[offerIndex]
 			dictionaries = deal.Dictionaries
@@ -307,13 +400,32 @@ func handleCallback(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
 				offer = deal.ReturnFlight
 				directionStr = "Return"
 			}
+			itineraryIdx = 0 // each leg is a single-itinerary offer
+		} else if strings.HasPrefix(key, "FLIGHTS_") {
+			offersRaw := storedMapSlice[0]["offers"]
+			dictRaw := storedMapSlice[0]["dictionaries"]
+			offers, ok := offersRaw.([]map[string]interface{})
+			if !ok {
+				bot.Request(tgbotapi.NewCallback(update.CallbackQuery.ID, "Search session expired."))
+				return
+			}
+			if offerIndex >= len(offers) {
+				return
+			}
+			offer = offers[offerIndex]
+			if dictRaw != nil {
+				dictionaries, _ = dictRaw.(map[string]interface{})
+			}
+			if directionIndex == 1 {
+				directionStr = "Return"
+			}
+			itineraryIdx = directionIndex
 		} else {
-			// This part would handle standard /flights details.
-			bot.Request(tgbotapi.NewCallback(update.CallbackQuery.ID, "Details for /flights not fully implemented in this example."))
+			bot.Request(tgbotapi.NewCallback(update.CallbackQuery.ID, "Search session expired."))
 			return
 		}
 
-		detailText := buildDetailedItinerary(offer, dictionaries, directionStr)
+		detailText := buildDetailedItinerary(offer, dictionaries, directionStr, itineraryIdx)
 		backCallbackData := fmt.Sprintf("BACK_%s_%d", key, originalOffset)
 		keyboard := tgbotapi.NewInlineKeyboardMarkup(
 			tgbotapi.NewInlineKeyboardRow(
@@ -330,7 +442,10 @@ func handleCallback(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
 		var key string
 		var offset int
 
-		if parts[1] == "DEAL" {
+		if parts[1] == "DEAL" && len(parts) >= 4 {
+			key = fmt.Sprintf("%s_%s", parts[1], parts[2])
+			offset, _ = strconv.Atoi(parts[3])
+		} else if parts[1] == "FLIGHTS" && len(parts) >= 4 {
 			key = fmt.Sprintf("%s_%s", parts[1], parts[2])
 			offset, _ = strconv.Atoi(parts[3])
 		} else {
@@ -372,19 +487,55 @@ Example: /month_deals TLV BER 2025-12 7
 		bot.Send(msg)
 
 	case "flights":
-		// NOTE: The new detail view logic in handleCallback is focused on /month_deals.
-		// To make it work for /flights, similar logic for storing and retrieving
-		// flight data and dictionaries would be needed, which is a bit more complex.
-		// For now, this command will show a basic list without the new detail buttons.
 		parts := strings.Split(update.Message.Text, " ")
 		if len(parts) < 4 {
-			bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, "Usage: /flights FROM TO DATE [RETURN_DATE]"))
+			bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, "Usage: /flights FROM TO DATE [RETURN_DATE]\nExample: /flights TLV BER 2026-04-10 2026-04-17"))
 			return
 		}
-		origin, dest := parts[1], parts[2]
-		bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("Searching /flights for %s->%s... (Note: Interactive details are currently enabled for /month_deals)", origin, dest)))
-		// The original /flights logic can be placed here.
-		// Due to the complexity of the refactor, I've focused on perfecting the /month_deals flow.
+		origin := strings.ToUpper(parts[1])
+		dest := strings.ToUpper(parts[2])
+		depDate := parts[3]
+		returnDate := ""
+		if len(parts) >= 5 {
+			returnDate = parts[4]
+		}
+		if _, err := time.Parse("2006-01-02", depDate); err != nil {
+			bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, "Invalid departure date. Use YYYY-MM-DD."))
+			return
+		}
+		if returnDate != "" {
+			if _, err := time.Parse("2006-01-02", returnDate); err != nil {
+				bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, "Invalid return date. Use YYYY-MM-DD."))
+				return
+			}
+		}
+		searchingMsg := fmt.Sprintf("✈️ Searching flights: %s → %s (%s", origin, dest, depDate)
+		if returnDate != "" {
+			searchingMsg += " — " + returnDate
+		}
+		searchingMsg += ")..."
+		initialMsg := tgbotapi.NewMessage(update.Message.Chat.ID, searchingMsg)
+		sentMsg, _ := bot.Send(initialMsg)
+		resp, err := amadeusClient.FlightOffersSearch(origin, dest, depDate, returnDate, 0, 15)
+		if err != nil {
+			bot.Send(tgbotapi.NewEditMessageText(sentMsg.Chat.ID, sentMsg.MessageID, fmt.Sprintf("❌ Search error: %v", err)))
+			return
+		}
+		if len(resp.Data) == 0 {
+			bot.Send(tgbotapi.NewEditMessageText(sentMsg.Chat.ID, sentMsg.MessageID, "😔 No flights found for these dates."))
+			return
+		}
+		flightsKey := fmt.Sprintf("FLIGHTS_%s-%s-%s", origin, dest, depDate)
+		if returnDate != "" {
+			flightsKey += "-" + returnDate
+		}
+		if flightStore[sentMsg.Chat.ID] == nil {
+			flightStore[sentMsg.Chat.ID] = make(map[string][]map[string]interface{})
+		}
+		flightStore[sentMsg.Chat.ID][flightsKey] = []map[string]interface{}{
+			{"offers": resp.Data, "dictionaries": resp.Dictionaries},
+		}
+		displayFlightPage(bot, sentMsg.Chat.ID, sentMsg.MessageID, flightsKey, 0)
 
 	case "month_deals":
 		parts := strings.Split(update.Message.Text, " ")
