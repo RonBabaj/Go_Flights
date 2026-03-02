@@ -433,18 +433,35 @@ Example: /month_deals TLV BER 2025-12 7
 	}
 }
 
+// healthHandler responds to Render health checks and root requests.
+func healthHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("FlightCaptain OK"))
+}
+
 // Main entry point
 func main() {
-	// Start the HTTP server for Render Deployment
+	if err := godotenv.Load(); err != nil {
+		log.Println("Note: .env file not found.")
+	}
+
+	// HTTP server for Render: bind to 0.0.0.0 and use PORT env
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "10000"
 	}
-	// initialize the bot
-	http.ListenAndServe(":"+port, nil)
-	if err := godotenv.Load(); err != nil {
-		log.Println("Note: .env file not found.")
-	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", healthHandler)
+	mux.HandleFunc("/health", healthHandler)
+	addr := "0.0.0.0:" + port
+	go func() {
+		log.Printf("Listening on %s for health checks", addr)
+		if err := http.ListenAndServe(addr, mux); err != nil {
+			log.Fatalf("HTTP server: %v", err)
+		}
+	}()
+
 	botToken := os.Getenv("TELEGRAM_BOT_TOKEN")
 	if botToken == "" {
 		log.Fatal("TELEGRAM_BOT_TOKEN is not set.")
