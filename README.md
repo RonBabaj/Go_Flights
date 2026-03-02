@@ -51,7 +51,7 @@ Inline button presses (like “Load more” or “Flight 2”) are tied to each 
 ## ⚙️ Installation
 
 ```bash
-### 1. Clone the repository
+1. Clone the repository
 
 git clone https://github.com/YOUR_USERNAME/flight-captain.git
 cd flight-captain
