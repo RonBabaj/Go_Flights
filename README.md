@@ -78,23 +78,24 @@ bash
 Copy code
 go run main.go
 ```
-🧠 Command Reference
-Command	Description
-/start	Welcome message and usage guide
-/help	Shows example commands
-/flights FROM TO DATE	One-way flight search
-/flights FROM TO DATE DURATION	Round-trip flight search (e.g. 7d, 10d)
+## 🧠 Command Reference
+---
+### Command	Description
+- ** /start	Welcome message and usage guide **
+- ** /help	Shows example commands **
+- ** /flights FROM TO DATE	One-way flight search **
+- ** /flights FROM TO DATE DURATION	Round-trip flight search (e.g. 7d, 10d) **
 
-📡 API Integration
+#### 📡 API Integration
 The bot uses the following Amadeus endpoints:
 
-Authentication:
+### Authentication:
 POST https://test.api.amadeus.com/v1/security/oauth2/token
 
-Flight Offers Search:
+### Flight Offers Search:
 GET https://test.api.amadeus.com/v2/shopping/flight-offers
 
-Amadeus documentation:
+### Amadeus documentation:
 https://developers.amadeus.com/self-service/category/air/api-doc/flight-offers-search
 
-Made with ❤️ and ☕ by a Developer who hates slow layovers.
+#### Made with ❤️ and ☕ by a Developer who hates slow layovers.
