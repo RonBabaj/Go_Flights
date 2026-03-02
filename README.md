@@ -50,26 +50,34 @@ Inline button presses (like “Load more” or “Flight 2”) are tied to each 
 
 ## ⚙️ Installation
 
-### 1. Clone the repository
 ```bash
+### 1. Clone the repository
+
 git clone https://github.com/YOUR_USERNAME/flight-captain.git
 cd flight-captain
+```
+```bash
 2. Set up environment variables
 Create a .env file in the project root:
-
-bash
+```
+```bash
 Copy code
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token
 AMADEUS_CLIENT_ID=your_amadeus_client_id
 AMADEUS_CLIENT_SECRET=your_amadeus_client_secret
+```
+```bash
 3. Install dependencies
 bash
 Copy code
 go mod tidy
+```
+```bash
 4. Run the bot
 bash
 Copy code
 go run main.go
+```
 🧠 Command Reference
 Command	Description
 /start	Welcome message and usage guide
