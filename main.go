@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -446,18 +447,22 @@ func main() {
 		log.Println("Note: .env file not found.")
 	}
 
-	// HTTP server for Render: bind to 0.0.0.0 and use PORT env
+	// Bind port first so Render detects it before any bot init (which may exit)
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "10000"
 	}
+	addr := "0.0.0.0:" + port
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Fatalf("Failed to listen on %s: %v", addr, err)
+	}
+	log.Printf("Listening on %s for health checks", addr)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", healthHandler)
 	mux.HandleFunc("/health", healthHandler)
-	addr := "0.0.0.0:" + port
 	go func() {
-		log.Printf("Listening on %s for health checks", addr)
-		if err := http.ListenAndServe(addr, mux); err != nil {
+		if err := http.Serve(listener, mux); err != nil {
 			log.Fatalf("HTTP server: %v", err)
 		}
 	}()
