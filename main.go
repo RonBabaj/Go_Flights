@@ -469,12 +469,13 @@ func main() {
 
 	botToken := os.Getenv("TELEGRAM_BOT_TOKEN")
 	if botToken == "" {
-		log.Fatal("TELEGRAM_BOT_TOKEN is not set.")
+		log.Println("TELEGRAM_BOT_TOKEN is not set. HTTP server is up; set the token in Render Environment to enable the bot.")
+		select {} // block forever so Render sees the open port and deploy succeeds
 	}
 	amadeusClient = NewAmadeusClient()
 	bot, err := tgbotapi.NewBotAPI(botToken)
 	if err != nil {
-		log.Panic(err)
+		log.Fatalf("Telegram bot init failed: %v", err)
 	}
 	log.Printf("✅ Authorized on account %s. Bot is running...", bot.Self.UserName)
 	u := tgbotapi.NewUpdate(0)

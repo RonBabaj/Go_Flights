@@ -1,0 +1,8 @@
+# Render Web Service - https://render.com/docs/web-services
+services:
+  - type: web
+    name: flight-captain
+    env: go
+    buildCommand: go build -o server .
+    startCommand: ./server
+    healthCheckPath: /health
