@@ -70,22 +70,39 @@ func getItinerarySummary(offer map[string]interface{}) (string, string, string, 
 }
 
 // getItinerarySummaryAt does the same for the itinerary at the given index (for round-trip offers).
+// Returns N/A values if the offer shape is unexpected (avoids panic on malformed Amadeus responses).
 func getItinerarySummaryAt(offer map[string]interface{}, itineraryIndex int) (string, string, string, int) {
 	segmentsInterface, ok := offer["itineraries"].([]interface{})
 	if !ok || itineraryIndex >= len(segmentsInterface) {
 		return "N/A", "N/A", "N/A", 0
 	}
-	itinerary := segmentsInterface[itineraryIndex].(map[string]interface{})
+	itinerary, ok := segmentsInterface[itineraryIndex].(map[string]interface{})
+	if !ok {
+		return "N/A", "N/A", "N/A", 0
+	}
 	segments, ok := itinerary["segments"].([]interface{})
 	if !ok || len(segments) == 0 {
 		return "N/A", "N/A", "N/A", 0
 	}
-	firstSegment := segments[0].(map[string]interface{})
-	lastSegment := segments[len(segments)-1].(map[string]interface{})
-	startCode := firstSegment["departure"].(map[string]interface{})["iataCode"].(string)
-	endCode := lastSegment["arrival"].(map[string]interface{})["iataCode"].(string)
-	_, startTime := formatDateAndTime(firstSegment["departure"].(map[string]interface{})["at"].(string))
-	_, endTime := formatDateAndTime(lastSegment["arrival"].(map[string]interface{})["at"].(string))
+	firstSegment, ok := segments[0].(map[string]interface{})
+	if !ok {
+		return "N/A", "N/A", "N/A", 0
+	}
+	lastSegment, ok := segments[len(segments)-1].(map[string]interface{})
+	if !ok {
+		return "N/A", "N/A", "N/A", 0
+	}
+	dep, _ := firstSegment["departure"].(map[string]interface{})
+	arr, _ := lastSegment["arrival"].(map[string]interface{})
+	if dep == nil || arr == nil {
+		return "N/A", "N/A", "N/A", 0
+	}
+	startCode, _ := dep["iataCode"].(string)
+	endCode, _ := arr["iataCode"].(string)
+	atDep, _ := dep["at"].(string)
+	atArr, _ := arr["at"].(string)
+	_, startTime := formatDateAndTime(atDep)
+	_, endTime := formatDateAndTime(atArr)
 	totalDuration := formatDuration(startTime, endTime)
 	stops := len(segments) - 1
 	return startCode, endCode, totalDuration, stops
@@ -246,11 +263,23 @@ func displayFlightPage(bot *tgbotapi.BotAPI, chatID int64, messageID int, key st
 	} else if strings.HasPrefix(key, "FLIGHTS_") {
 		storedMapSlice, ok := flightStore[chatID][key]
 		if !ok {
+			bot.Send(tgbotapi.NewEditMessageText(chatID, messageID, "Search session expired. Run /flights again."))
 			return
 		}
 		offersRaw := storedMapSlice[0]["offers"]
 		offers, ok := offersRaw.([]map[string]interface{})
 		if !ok {
+			if slice, ok := offersRaw.([]interface{}); ok {
+				offers = make([]map[string]interface{}, 0, len(slice))
+				for _, v := range slice {
+					if m, ok := v.(map[string]interface{}); ok {
+						offers = append(offers, m)
+					}
+				}
+			}
+		}
+		if len(offers) == 0 {
+			bot.Send(tgbotapi.NewEditMessageText(chatID, messageID, "No flight data available. Try the search again."))
 			return
 		}
 		const maxPerPage = 5
@@ -261,17 +290,15 @@ func displayFlightPage(bot *tgbotapi.BotAPI, chatID int64, messageID int, key st
 			pageEnd = totalOffers
 		}
 		keyParts := strings.Split(key, "_")
-		if len(keyParts) < 2 {
+		if len(keyParts) < 4 {
+			bot.Send(tgbotapi.NewEditMessageText(chatID, messageID, "Invalid session. Run /flights again."))
 			return
 		}
-		params := strings.Split(keyParts[1], "-")
-		if len(params) < 3 {
-			return
-		}
-		origin, dest := params[0], params[1]
-		depDate, retDate := params[2], ""
-		if len(params) >= 4 {
-			retDate = params[3]
+		origin, dest := keyParts[1], keyParts[2]
+		depDate := keyParts[3]
+		retDate := ""
+		if len(keyParts) >= 5 {
+			retDate = keyParts[4]
 		}
 		msgText.WriteString(fmt.Sprintf("✈️ **Flights %s → %s**\n", origin, dest))
 		msgText.WriteString(fmt.Sprintf("   _%s", depDate))
@@ -300,8 +327,8 @@ func displayFlightPage(bot *tgbotapi.BotAPI, chatID int64, messageID int, key st
 				msgText.WriteString(fmt.Sprintf("🛬 **Return:** %s → %s | 🕒 %s (%s)\n", retStart, retEnd, retDur, stopStrRet))
 			}
 			msgText.WriteString("\n")
-			outCallback := fmt.Sprintf("DETAILS_FLIGHTS_%s_%d_0_%d", keyParts[1], i, offset)
-			retCallback := fmt.Sprintf("DETAILS_FLIGHTS_%s_%d_1_%d", keyParts[1], i, offset)
+			outCallback := fmt.Sprintf("DETAILS_%s_%d_0_%d", key, i, offset)
+			retCallback := fmt.Sprintf("DETAILS_%s_%d_1_%d", key, i, offset)
 			if len(itineraries) > 1 {
 				rows = append(rows, tgbotapi.NewInlineKeyboardRow(
 					tgbotapi.NewInlineKeyboardButtonData("Outbound Details", outCallback),
@@ -320,11 +347,11 @@ func displayFlightPage(bot *tgbotapi.BotAPI, chatID int64, messageID int, key st
 			if prevOffset < 0 {
 				prevOffset = 0
 			}
-			navRow = append(navRow, tgbotapi.NewInlineKeyboardButtonData("⬅️ Prev", fmt.Sprintf("PREV_FLIGHTS_%s_%d", keyParts[1], prevOffset)))
+			navRow = append(navRow, tgbotapi.NewInlineKeyboardButtonData("⬅️ Prev", fmt.Sprintf("PREV_%s_%d", key, prevOffset)))
 		}
 		if pageEnd < totalOffers {
 			nextOffset := offset + maxPerPage
-			navRow = append(navRow, tgbotapi.NewInlineKeyboardButtonData("Next ➡️", fmt.Sprintf("NEXT_FLIGHTS_%s_%d", keyParts[1], nextOffset)))
+			navRow = append(navRow, tgbotapi.NewInlineKeyboardButtonData("Next ➡️", fmt.Sprintf("NEXT_%s_%d", key, nextOffset)))
 		}
 		if len(navRow) > 0 {
 			rows = append(rows, navRow)
@@ -355,17 +382,17 @@ func handleCallback(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
 		var key string
 		var offerIndex, directionIndex, originalOffset int
 
-		// DETAILS_DEAL_KEY-PART_0_0_0 or DETAILS_FLIGHTS_KEY-PART_0_0_0
-		if parts[1] == "DEAL" {
+		// DETAILS_DEAL_KEY-PART_0_0_0 or DETAILS_FLIGHTS_ORIGIN_DEST_DEP_RET_offerIdx_dirIdx_offset
+		if parts[1] == "DEAL" && len(parts) >= 6 {
 			key = fmt.Sprintf("%s_%s", parts[1], parts[2])
 			offerIndex, _ = strconv.Atoi(parts[3])
 			directionIndex, _ = strconv.Atoi(parts[4])
 			originalOffset, _ = strconv.Atoi(parts[5])
-		} else if parts[1] == "FLIGHTS" && len(parts) >= 6 {
-			key = fmt.Sprintf("%s_%s", parts[1], parts[2])
-			offerIndex, _ = strconv.Atoi(parts[3])
-			directionIndex, _ = strconv.Atoi(parts[4])
-			originalOffset, _ = strconv.Atoi(parts[5])
+		} else if parts[1] == "FLIGHTS" && len(parts) >= 8 {
+			key = strings.Join(parts[1:len(parts)-3], "_")
+			offerIndex, _ = strconv.Atoi(parts[len(parts)-3])
+			directionIndex, _ = strconv.Atoi(parts[len(parts)-2])
+			originalOffset, _ = strconv.Atoi(parts[len(parts)-1])
 		} else {
 			key = parts[1]
 			offerIndex, _ = strconv.Atoi(parts[2])
@@ -445,9 +472,9 @@ func handleCallback(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
 		if parts[1] == "DEAL" && len(parts) >= 4 {
 			key = fmt.Sprintf("%s_%s", parts[1], parts[2])
 			offset, _ = strconv.Atoi(parts[3])
-		} else if parts[1] == "FLIGHTS" && len(parts) >= 4 {
-			key = fmt.Sprintf("%s_%s", parts[1], parts[2])
-			offset, _ = strconv.Atoi(parts[3])
+		} else if parts[1] == "FLIGHTS" && len(parts) >= 5 {
+			key = strings.Join(parts[1:len(parts)-1], "_")
+			offset, _ = strconv.Atoi(parts[len(parts)-1])
 		} else {
 			key = parts[1]
 			offset, _ = strconv.Atoi(parts[2])
@@ -465,7 +492,11 @@ func handleCommands(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
 
 	log.Printf("[MSG] Received command from user %d: %s", update.Message.From.ID, update.Message.Text)
 
-	switch update.Message.Command() {
+	cmd := update.Message.Command()
+	if at := strings.Index(cmd, "@"); at != -1 {
+		cmd = cmd[:at] // "flights@botname" -> "flights" in groups
+	}
+	switch cmd {
 	case "start":
 		startText := `Welcome to FlightCaptain! ✈️
 Now using the **Amadeus Live API**.
@@ -487,55 +518,63 @@ Example: /month_deals TLV BER 2025-12 7
 		bot.Send(msg)
 
 	case "flights":
-		parts := strings.Split(update.Message.Text, " ")
-		if len(parts) < 4 {
-			bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, "Usage: /flights FROM TO DATE [RETURN_DATE]\nExample: /flights TLV BER 2026-04-10 2026-04-17"))
-			return
-		}
-		origin := strings.ToUpper(parts[1])
-		dest := strings.ToUpper(parts[2])
-		depDate := parts[3]
-		returnDate := ""
-		if len(parts) >= 5 {
-			returnDate = parts[4]
-		}
-		if _, err := time.Parse("2006-01-02", depDate); err != nil {
-			bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, "Invalid departure date. Use YYYY-MM-DD."))
-			return
-		}
-		if returnDate != "" {
-			if _, err := time.Parse("2006-01-02", returnDate); err != nil {
-				bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, "Invalid return date. Use YYYY-MM-DD."))
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[PANIC] /flights: %v", r)
+					bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("❌ Something went wrong: %v. Try different dates or check airport codes (e.g. NAP = Naples).", r)))
+				}
+			}()
+			parts := strings.Split(update.Message.Text, " ")
+			if len(parts) < 4 {
+				bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, "Usage: /flights FROM TO DATE [RETURN_DATE]\nExample: /flights TLV BER 2026-04-10 2026-04-17"))
 				return
 			}
-		}
-		searchingMsg := fmt.Sprintf("✈️ Searching flights: %s → %s (%s", origin, dest, depDate)
-		if returnDate != "" {
-			searchingMsg += " — " + returnDate
-		}
-		searchingMsg += ")..."
-		initialMsg := tgbotapi.NewMessage(update.Message.Chat.ID, searchingMsg)
-		sentMsg, _ := bot.Send(initialMsg)
-		resp, err := amadeusClient.FlightOffersSearch(origin, dest, depDate, returnDate, 0, 15)
-		if err != nil {
-			bot.Send(tgbotapi.NewEditMessageText(sentMsg.Chat.ID, sentMsg.MessageID, fmt.Sprintf("❌ Search error: %v", err)))
-			return
-		}
-		if len(resp.Data) == 0 {
-			bot.Send(tgbotapi.NewEditMessageText(sentMsg.Chat.ID, sentMsg.MessageID, "😔 No flights found for these dates."))
-			return
-		}
-		flightsKey := fmt.Sprintf("FLIGHTS_%s-%s-%s", origin, dest, depDate)
-		if returnDate != "" {
-			flightsKey += "-" + returnDate
-		}
-		if flightStore[sentMsg.Chat.ID] == nil {
-			flightStore[sentMsg.Chat.ID] = make(map[string][]map[string]interface{})
-		}
-		flightStore[sentMsg.Chat.ID][flightsKey] = []map[string]interface{}{
-			{"offers": resp.Data, "dictionaries": resp.Dictionaries},
-		}
-		displayFlightPage(bot, sentMsg.Chat.ID, sentMsg.MessageID, flightsKey, 0)
+			origin := strings.ToUpper(parts[1])
+			dest := strings.ToUpper(parts[2])
+			depDate := parts[3]
+			returnDate := ""
+			if len(parts) >= 5 {
+				returnDate = parts[4]
+			}
+			if _, err := time.Parse("2006-01-02", depDate); err != nil {
+				bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, "Invalid departure date. Use YYYY-MM-DD."))
+				return
+			}
+			if returnDate != "" {
+				if _, err := time.Parse("2006-01-02", returnDate); err != nil {
+					bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, "Invalid return date. Use YYYY-MM-DD."))
+					return
+				}
+			}
+			searchingMsg := fmt.Sprintf("✈️ Searching flights: %s → %s (%s", origin, dest, depDate)
+			if returnDate != "" {
+				searchingMsg += " — " + returnDate
+			}
+			searchingMsg += ")..."
+			initialMsg := tgbotapi.NewMessage(update.Message.Chat.ID, searchingMsg)
+			sentMsg, _ := bot.Send(initialMsg)
+			resp, err := amadeusClient.FlightOffersSearch(origin, dest, depDate, returnDate, 0, 15)
+			if err != nil {
+				bot.Send(tgbotapi.NewEditMessageText(sentMsg.Chat.ID, sentMsg.MessageID, fmt.Sprintf("❌ Search error: %v\n\n_Tip: Try different dates or check IATA codes (e.g. NAP = Naples, Italy)._", err)))
+				return
+			}
+			if len(resp.Data) == 0 {
+				bot.Send(tgbotapi.NewEditMessageText(sentMsg.Chat.ID, sentMsg.MessageID, "😔 No flights found for these dates.\n\n_Try different dates or check airport codes (e.g. NAP = Naples, Italy)._"))
+				return
+			}
+			flightsKey := fmt.Sprintf("FLIGHTS_%s_%s_%s", origin, dest, depDate)
+			if returnDate != "" {
+				flightsKey += "_" + returnDate
+			}
+			if flightStore[sentMsg.Chat.ID] == nil {
+				flightStore[sentMsg.Chat.ID] = make(map[string][]map[string]interface{})
+			}
+			flightStore[sentMsg.Chat.ID][flightsKey] = []map[string]interface{}{
+				{"offers": resp.Data, "dictionaries": resp.Dictionaries},
+			}
+			displayFlightPage(bot, sentMsg.Chat.ID, sentMsg.MessageID, flightsKey, 0)
+		}()
 
 	case "month_deals":
 		parts := strings.Split(update.Message.Text, " ")
@@ -635,7 +674,8 @@ func main() {
 	for update := range updates {
 		if update.CallbackQuery != nil {
 			handleCallback(bot, update)
-		} else if update.Message != nil && update.Message.IsCommand() {
+		} else if update.Message != nil && update.Message.Text != "" &&
+			(update.Message.IsCommand() || update.Message.Text[0] == '/') {
 			handleCommands(bot, update)
 		}
 	}
